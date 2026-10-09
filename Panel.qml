@@ -531,9 +531,10 @@ Panel {
     readonly property var row: root.curveRows()[rowIndex]
 
     width: parent ? parent.width : 0
-    implicitHeight: Math.max(tempField.implicitHeight, rpmSlider.implicitHeight)
+    implicitHeight: Math.max(tempLabel.implicitHeight, rpmSlider.implicitHeight)
 
     Text {
+      id: tempLabel
       textFormat: Text.PlainText
       text: Math.round(curveRow.row[0]) + "°C"
       color: root.dim

@@ -29,6 +29,8 @@ CLIENT_TIMEOUT = 2.0
 HEARTBEAT_TIMEOUT = 15.0
 POLL_SECONDS = 1.5
 SENSOR_RECOVERY_SAMPLES = 3
+OVERHEAT_C = 95.0           # hand control back to firmware above this
+OVERHEAT_CLEAR_C = 90.0     # ... and allow recovery below this
 DEFAULT_CURVE = [[45, 1400], [60, 2400], [72, 3400], [82, 4400], [92, 5200]]
 CURVE_MIN_RPM = 1200     # below this the EC may not sustain control
 CURVE_MAX_RPM = 5300     # measured ceiling for this chassis
@@ -282,6 +284,7 @@ class Controller:
         self.error = ""
         self.notice = ""
         self.fault = False
+        self.thermal_fault = False
         self.write_failures = 0
 
     # ---- safety ---------------------------------------------------------
@@ -324,8 +327,6 @@ class Controller:
         return max(CURVE_MIN_RPM, min(CURVE_MAX_RPM, target))
 
     def tick(self):
-        if self.fault:
-            return False
         hw = self.hardware
         if not hw.has_control():
             self.error = ""
@@ -334,13 +335,33 @@ class Controller:
         temperature = Thermals.cpu_temp()
         if temperature is None:
             return self.fail("CPU temperature sensor unavailable")
-        if temperature >= 95:
-            # Software safeguard. Release to firmware - the EC's own thermal
-            # table is better informed than one sysfs input.
-            self.error = f"Very high CPU temperature ({temperature}C): released fans to firmware control"
+        # Thermal safeguard: above the limit, hand control back to the EC's
+        # own thermal table. If the release is confirmed we stay observable
+        # and clear the fault once temperatures fall back; if the release
+        # itself fails we latch and stop touching the hardware.
+        if temperature >= OVERHEAT_C:
+            message = f"Very high CPU temperature ({temperature}C): fans returned to firmware control"
             if not self.safe():
-                return self.fail(self.error + "; release failed")
-            self.fault = True
+                return self.fail(message + "; release failed")
+            self.error = message
+            self.last_heartbeat = None
+            self.state["mode"] = "auto"
+            self.thermal_fault = True
+            self.fault = True      # visible + refuses new control until cleared
+            return False
+        if self.fault:
+            # Already in firmware control (verified by safe() during the
+            # fault). Recover only below the clear threshold and only while
+            # every fan still reads back as firmware-controlled.
+            if temperature < OVERHEAT_CLEAR_C and self.thermal_fault:
+                released = all(self.hardware.read_target(f["name"]) == 0 for f in self.hardware.fans())
+                if released:
+                    self.fault = False
+                    self.thermal_fault = False
+                    self.error = ""
+                    self.notice = "Temperature back under limit; firmware control still active"
+                    print("LegionFan: thermal safeguard cleared; firmware control active",
+                          file=sys.stderr, flush=True)
             return False
         age = None if self.last_heartbeat is None else time.monotonic() - self.last_heartbeat
         if age is None or age > HEARTBEAT_TIMEOUT or self.state["mode"] == "auto":

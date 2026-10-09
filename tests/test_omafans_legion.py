@@ -9,7 +9,9 @@ mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
 # Stub the live thermal reads: host temperature must not decide a test.
+# The stub dict is attached to the module so tests can vary the temperature.
 _FAKE_TEMP = {"c": 65.0, "zone": "TCPU"}
+mod._FAKE_TEMP = _FAKE_TEMP
 mod.Thermals.cpu_temp = staticmethod(lambda: _FAKE_TEMP["c"])
 mod.Thermals.hottest_zone = staticmethod(lambda: (_FAKE_TEMP["zone"], _FAKE_TEMP["c"]))
 
@@ -151,6 +153,41 @@ class ControllerTests(unittest.TestCase):
         c.tick()                    # third consecutive
         self.assertTrue(c.fault)
         self.assertTrue(c.error.startswith("Fan RPM write failed"))
+
+    def test_overheat_releases_then_recovers_below_clear(self):
+        hw = FakeHardware()
+        c = mod.Controller(hw)
+        c.state["mode"] = "manual"
+        c.state["manual_rpm"] = 3000
+        c.last_heartbeat = __import__("time").monotonic()
+        # over the limit: release to firmware, latch, refuse control
+        mod._FAKE_TEMP["c"] = 96.0
+        c.tick()
+        self.assertTrue(c.fault)
+        self.assertTrue(c.thermal_fault)
+        self.assertEqual(hw.targets, {"fan1": 0, "fan2": 0})
+        self.assertIn("firmware control", c.error)
+        # between clear and limit: still latched, no writes
+        mod._FAKE_TEMP["c"] = 93.0
+        c.tick()
+        self.assertTrue(c.fault)
+        # below the clear threshold with firmware control confirmed: recover
+        mod._FAKE_TEMP["c"] = 88.0
+        c.tick()
+        self.assertFalse(c.fault)
+        self.assertFalse(c.thermal_fault)
+        self.assertEqual(c.error, "")
+
+    def test_overheat_with_failed_release_stays_latched(self):
+        hw = FakeHardware(succeeds=False)
+        c = mod.Controller(hw)
+        mod._FAKE_TEMP["c"] = 96.0
+        c.tick()
+        self.assertTrue(c.fault)
+        # a thermal fault with a failed release never auto-recovers
+        mod._FAKE_TEMP["c"] = 50.0
+        c.tick()
+        self.assertTrue(c.fault)
 
     def test_safe_returns_fans_to_firmware(self):
         hw = FakeHardware()
