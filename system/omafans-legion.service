@@ -1,0 +1,38 @@
+[Unit]
+Description=LegionFan Lenovo Legion fan controller
+After=sysinit.target
+ConditionPathExists=/etc/omafans-legion/controller.json
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/local/lib/omafans-legion/omafans_legion.py serve
+ExecStopPost=/usr/bin/python3 -I /usr/local/lib/omafans-legion/omafans_legion.py release
+Restart=no
+TimeoutStopSec=5
+RuntimeDirectory=omafans-legion
+RuntimeDirectoryMode=0755
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=CAP_CHOWN
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+ReadOnlyPaths=/sys
+ReadWritePaths=-/sys/class/hwmon
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

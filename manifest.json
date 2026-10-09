@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "community.omafanslegion",
+  "name": "LegionFan",
+  "version": "0.1.0",
+  "author": "LinuxGamerUK",
+  "license": "MIT",
+  "description": "Lenovo Legion fan monitoring and temperature-curve RPM control for Omarchy.",
+  "repository": "https://github.com/LinuxGamerUK/omafans-legion",
+  "kinds": [
+    "bar-widget",
+    "service"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "LegionFan",
+    "description": "Fan RPM and CPU temperature with manual and temperature-curve control.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {},
+    "schema": []
+  }
+}
