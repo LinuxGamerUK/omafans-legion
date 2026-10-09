@@ -41,8 +41,70 @@ Panel {
   readonly property real hottestCelsius: service ? service.hottestCelsius : 0
   readonly property string statusError: service ? service.error : ""
   readonly property string notice: service ? service.notice : ""
+  readonly property string helperPath: decodeURIComponent(Qt.resolvedUrl("fanctl.py").toString().replace(/^file:\/\//, ""))
   readonly property bool busy: service ? service.busy : false
   readonly property bool canControl: controlEnabled && !busy
+
+  // The bar instance resolves the shared service object through the shell's
+  // bar facade; when that lookup fails (bar built before the service
+  // registered, or a facade without service access) fall back to polling the
+  // unprivileged helper directly so the bar label never shows less than the
+  // widget itself knows.
+  property bool fallbackActive: false
+  property var fallbackFans: []
+  property real fallbackTemp: 0
+  readonly property var effectiveFans: (service && service.fans) ? service.fans : fallbackFans
+  readonly property real effectiveTemp: (service && service.temperature) ? service.temperature : fallbackTemp
+  readonly property bool effectiveServiceUp: service ? service.serviceUp : (fallbackRan && !fallbackFailed)
+
+  property bool fallbackRan: false
+  property bool fallbackFailed: false
+
+  function startFallback() {
+    if (service) return
+    fallbackActive = true
+    fallbackTimer.running = true
+  }
+
+  Timer {
+    id: fallbackTimer
+    interval: 5000
+    repeat: true
+    running: false
+    triggeredOnStart: true
+    onTriggered: {
+      if (root.service) { running = false; return }
+      if (fallbackHelper.running) return
+      fallbackHelper.command = ["/usr/bin/python3", root.helperPath, "status"]
+      fallbackHelper.running = true
+    }
+  }
+
+  Process {
+    id: fallbackHelper
+    stdout: StdioCollector { id: fallbackOutput; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 || !fallbackOutput.text) { root.fallbackFailed = true; return }
+      var parsed = null
+      try { parsed = JSON.parse(String(fallbackOutput.text)) } catch (e) { parsed = null }
+      if (!parsed || typeof parsed !== "object") { root.fallbackFailed = true; return }
+      root.fallbackRan = true
+      root.fallbackFans = Array.isArray(parsed.fans) ? parsed.fans : []
+      root.fallbackTemp = typeof parsed.temperature === "number" ? parsed.temperature : 0
+    }
+  }
+
+  onServiceChanged: {
+    if (service) {
+      fallbackActive = false
+      fallbackTimer.running = false
+      fallbackFans = []
+      fallbackRan = false
+      fallbackFailed = false
+    } else {
+      startFallback()
+    }
+  }
 
   // RPM range the daemon accepts
   readonly property int rpmMin: 1200
@@ -55,9 +117,10 @@ Panel {
   property bool curveDraftTouched: false
 
   function rpmText() {
+    var source = (service && service.fans) ? service.fans : fallbackFans
     var total = 0, count = 0
-    for (var i = 0; i < fans.length; i++) {
-      var f = fans[i]
+    for (var i = 0; i < source.length; i++) {
+      var f = source[i]
       if (typeof f.rpm === "number" && f.rpm > 0) { total += f.rpm; count++ }
     }
     if (count === 0) return "—"
@@ -65,14 +128,14 @@ Panel {
   }
 
   function tempText() {
-    return temperature > 0 ? Math.round(temperature) + "°C" : "—"
+    var t = (service && service.temperature) ? service.temperature : fallbackTemp
+    return t > 0 ? Math.round(t) + "°C" : "—"
   }
 
   function barLabel() {
-    if (!serviceUp && !available) return "Fan —"
-    if ((mode === "manual" || mode === "curve") && fans.length > 0
-        && typeof fans[0].rpm === "number")
-      return "Fan " + Math.round(fans[0].rpm)
+    if (!effectiveServiceUp && !available) return "Fan —"
+    if (effectiveFans.length > 0 && typeof effectiveFans[0].rpm === "number")
+      return "Fan " + Math.round(effectiveFans[0].rpm)
     return "Fan Auto"
   }
 
@@ -173,7 +236,7 @@ Panel {
     return parts.length ? parts.join("  ·  ") : "—"
   }
 
-  Component.onCompleted: seedDrafts()
+  Component.onCompleted: { seedDrafts(); startFallback() }
 
   IpcHandler {
     target: root.ipcTarget
@@ -200,7 +263,7 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.bar && root.bar.vertical ? "" : root.barLabel()
+    text: root.barLabel()
     dimmed: !root.serviceUp && !root.available
     active: root.mode !== "auto"
     tooltipText: root.barTooltip()
@@ -524,6 +587,9 @@ Panel {
       }
     }
   }
+
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
 
   component CurveRow: Item {
     id: curveRow
