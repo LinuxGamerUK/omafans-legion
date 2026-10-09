@@ -171,12 +171,34 @@ class ControllerTests(unittest.TestCase):
         mod._FAKE_TEMP["c"] = 93.0
         c.tick()
         self.assertTrue(c.fault)
-        # below the clear threshold with firmware control confirmed: recover
+        # below the clear threshold: recovery waits out the hold
         mod._FAKE_TEMP["c"] = 88.0
+        c.tick()
+        self.assertTrue(c.fault)
+        self.assertIsNotNone(c.thermal_clear_since)
+        # fast-forward past the hold: firmware control confirmed -> recover
+        c.thermal_clear_since -= (mod.OVERHEAT_CLEAR_HOLD + 1)
         c.tick()
         self.assertFalse(c.fault)
         self.assertFalse(c.thermal_fault)
+        self.assertIsNone(c.thermal_clear_since)
         self.assertEqual(c.error, "")
+
+    def test_recovery_requires_sustained_below_threshold(self):
+        hw = FakeHardware()
+        c = mod.Controller(hw)
+        mod._FAKE_TEMP["c"] = 96.0
+        c.tick()
+        # bounce back above the clear threshold resets the hold
+        mod._FAKE_TEMP["c"] = 88.0
+        c.tick()
+        first = c.thermal_clear_since
+        mod._FAKE_TEMP["c"] = 93.0
+        c.tick()
+        mod._FAKE_TEMP["c"] = 88.0
+        c.tick()
+        self.assertIsNotNone(c.thermal_clear_since)
+        self.assertGreater(c.thermal_clear_since, first)
 
     def test_overheat_with_failed_release_stays_latched(self):
         hw = FakeHardware(succeeds=False)

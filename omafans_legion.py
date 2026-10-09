@@ -31,6 +31,7 @@ POLL_SECONDS = 1.5
 SENSOR_RECOVERY_SAMPLES = 3
 OVERHEAT_C = 95.0           # hand control back to firmware above this
 OVERHEAT_CLEAR_C = 90.0     # ... and allow recovery below this
+OVERHEAT_CLEAR_HOLD = 60.0  # seconds below the clear threshold before recovery
 DEFAULT_CURVE = [[45, 1400], [60, 2400], [72, 3400], [82, 4400], [92, 5200]]
 CURVE_MIN_RPM = 1200     # below this the EC may not sustain control
 CURVE_MAX_RPM = 5300     # measured ceiling for this chassis
@@ -285,6 +286,7 @@ class Controller:
         self.notice = ""
         self.fault = False
         self.thermal_fault = False
+        self.thermal_clear_since = None
         self.write_failures = 0
 
     # ---- safety ---------------------------------------------------------
@@ -348,20 +350,35 @@ class Controller:
             self.state["mode"] = "auto"
             self.thermal_fault = True
             self.fault = True      # visible + refuses new control until cleared
+            self.thermal_clear_since = None
             return False
         if self.fault:
-            # Already in firmware control (verified by safe() during the
-            # fault). Recover only below the clear threshold and only while
-            # every fan still reads back as firmware-controlled.
-            if temperature < OVERHEAT_CLEAR_C and self.thermal_fault:
-                released = all(self.hardware.read_target(f["name"]) == 0 for f in self.hardware.fans())
-                if released:
-                    self.fault = False
-                    self.thermal_fault = False
-                    self.error = ""
-                    self.notice = "Temperature back under limit; firmware control still active"
-                    print("LegionFan: thermal safeguard cleared; firmware control active",
-                          file=sys.stderr, flush=True)
+            # Already in firmware control (verified by safe() when the fault
+            # was taken). Recover only after the temperature has stayed below
+            # the clear threshold for a sustained hold - otherwise a machine
+            # parked at the limit would flap between software and firmware
+            # control - and only while every fan still reads back as
+            # firmware-controlled.
+            if not self.thermal_fault:
+                return False  # write-failure fault: restart only
+            if temperature >= OVERHEAT_CLEAR_C:
+                self.thermal_clear_since = None
+                return False
+            now = time.monotonic()
+            if self.thermal_clear_since is None:
+                self.thermal_clear_since = now
+                return False
+            if now - self.thermal_clear_since < OVERHEAT_CLEAR_HOLD:
+                return False
+            released = all(self.hardware.read_target(f["name"]) == 0 for f in self.hardware.fans())
+            if released:
+                self.fault = False
+                self.thermal_fault = False
+                self.thermal_clear_since = None
+                self.error = ""
+                self.notice = "Temperature back under limit; firmware control still active"
+                print("LegionFan: thermal safeguard cleared; firmware control active",
+                      file=sys.stderr, flush=True)
             return False
         age = None if self.last_heartbeat is None else time.monotonic() - self.last_heartbeat
         if age is None or age > HEARTBEAT_TIMEOUT or self.state["mode"] == "auto":
