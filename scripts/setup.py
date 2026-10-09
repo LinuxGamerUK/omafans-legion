@@ -94,7 +94,7 @@ def install(user, dry_run):
     print("Reloading lenovo_wmi_other to apply fan visibility ...")
     reload_result = systemctl("daemon-reload")
     systemctl("enable", "omafans-legion.service")
-    print("Installed. Start with: sudo systemctl start omafans-legion.service")
+    print("Installed. Enable control with: systemctl start omafans-legion.service (as root)")
 
 
 def remove(dry_run):
